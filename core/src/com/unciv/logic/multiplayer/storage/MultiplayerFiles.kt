@@ -1,36 +1,34 @@
 package com.unciv.logic.multiplayer.storage
 
-import com.unciv.Constants
 import com.unciv.UncivGame
 import com.unciv.json.json
+import com.unciv.logic.BackwardCompatibility.migrateGameStatus
 import com.unciv.logic.GameInfo
 import com.unciv.logic.UncivFiles
 import com.unciv.logic.multiplayer.Multiplayer.GameStatus
+import com.unciv.logic.multiplayer.Multiplayer.ServerData
 
 /**
  * Allows access to games stored on a server for multiplayer purposes.
- * Defaults to using UncivGame.Current.settings.multiplayerServer if fileStorageIdentifier is not given.
  *
- * For low-level access only, use [UncivGame.multiplayer] on [UncivGame.Current] if you're looking to load/save a game.
+ * This is for low-level access only: use [UncivGame.multiplayer] on [UncivGame.Current] instead if you're looking to load/save a game.
  *
- * @param fileStorageIdentifier must be given if UncivGame.Current might not be initialized
  * @see FileStorage
- * @see UncivGame.Current.settings.multiplayerServer
  */
 @Suppress("RedundantSuspendModifier") // Methods can take a long time, so force users to use them in a coroutine to not get ANRs on Android
-class MultiplayerFiles(
-    private var fileStorageIdentifier: String? = null
-) {
-    fun fileStorage(): FileStorage {
-        val identifier = if (fileStorageIdentifier == null) UncivGame.Current.settings.multiplayer.server else fileStorageIdentifier
-
-        return if (identifier == Constants.dropboxMultiplayerServer) DropBox else UncivServerFileStorage(identifier!!)
+class MultiplayerFiles {
+    fun fileStorage(serverData: ServerData): FileStorage {
+        return if (serverData.url != null) {
+            UncivServerFileStorage(serverData.url)
+        } else {
+            DropBox
+        }
     }
 
     /** @throws FileStorageRateLimitReached if the file storage backend can't handle any additional actions for a time */
-    suspend fun tryUploadGame(gameInfo: GameInfo, withGameStatus: Boolean) {
+    suspend fun tryUploadGame(serverData: ServerData, gameInfo: GameInfo) {
         val zippedGameInfo = UncivFiles.gameInfoToString(gameInfo, forceZip = true)
-        fileStorage().saveFileData(gameInfo.gameId, zippedGameInfo, true)
+        fileStorage(serverData).saveFileData(gameInfo.gameId, zippedGameInfo, true)
 
         // We upload the multiplayer game info after the full game info because otherwise the following race condition will happen:
         // Current player ends turn -> Uploads multiplayer game info
@@ -38,9 +36,7 @@ class MultiplayerFiles(
         // Current player starts full game info upload
         // Other player sees update in preview -> Downloads game, gets old state
         // Current player finishes uploading game
-        if (withGameStatus) {
-            tryUploadGameStatus(GameStatus(gameInfo))
-        }
+        tryUploadGameStatus(serverData, gameInfo.gameId, GameStatus(gameInfo))
     }
 
     @Suppress("MemberVisibilityCanBePrivate")
@@ -52,17 +48,17 @@ class MultiplayerFiles(
      *
      * @see tryUploadGame
      */
-    suspend fun tryUploadGameStatus(status: GameStatus) {
+    suspend fun tryUploadGameStatus(serverData: ServerData, gameId: String, status: GameStatus) {
         val zippedGameInfo = json().toJson(status) // no gzip because gzip actually has more overhead than it saves in compression
-        fileStorage().saveFileData("${status.gameId}_Preview", zippedGameInfo, true)
+        fileStorage(serverData).saveFileData("${gameId}_Preview", zippedGameInfo, true)
     }
 
     /**
      * @throws FileStorageRateLimitReached if the file storage backend can't handle any additional actions for a time
      * @throws FileNotFoundException if the file can't be found
      */
-    suspend fun tryDownloadGame(gameId: String): GameInfo {
-        val zippedGameInfo = fileStorage().loadFileData(gameId)
+    suspend fun tryDownloadGame(serverData: ServerData, gameId: String): GameInfo {
+        val zippedGameInfo = fileStorage(serverData).loadFileData(gameId)
         return UncivFiles.gameInfoFromString(zippedGameInfo)
     }
 
@@ -70,8 +66,9 @@ class MultiplayerFiles(
      * @throws FileStorageRateLimitReached if the file storage backend can't handle any additional actions for a time
      * @throws FileNotFoundException if the file can't be found
      */
-    suspend fun tryDownloadGameStatus(gameId: String): GameStatus {
-        val zippedGameInfo = fileStorage().loadFileData("${gameId}_Preview")
-        return UncivFiles.multiplayerGameStatusFromString(zippedGameInfo)
+    suspend fun tryDownloadGameStatus(serverData: ServerData, gameId: String): GameStatus {
+        val status = fileStorage(serverData).loadFileData("${gameId}_Preview")
+        val migrated = migrateGameStatus(status)
+        return json().fromJson(GameStatus::class.java, migrated)
     }
 }

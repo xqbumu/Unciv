@@ -3,7 +3,9 @@ package com.unciv.ui.options
 import com.badlogic.gdx.Application
 import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.scenes.scene2d.ui.Table
+import com.unciv.UncivGame
 import com.unciv.logic.multiplayer.Multiplayer
+import com.unciv.logic.multiplayer.Multiplayer.ServerType
 import com.unciv.models.UncivSound
 import com.unciv.models.metadata.GameSetting
 import com.unciv.models.metadata.GameSettings
@@ -16,6 +18,7 @@ import com.unciv.ui.utils.extensions.addSeparator
 import com.unciv.ui.utils.extensions.brighten
 import com.unciv.ui.utils.extensions.format
 import com.unciv.ui.utils.extensions.toGdxArray
+import com.unciv.ui.utils.extensions.toLabel
 import java.time.Duration
 import java.time.temporal.ChronoUnit
 
@@ -78,10 +81,25 @@ fun OptionsPopup.multiplayerTab(): Table {
     addSeparator(tab)
 
     val refreshSelects = listOf(curRefreshSelect, allRefreshSelect, turnCheckerSelect).filterNotNull()
-    val serverInput = ServerInput.create { isCustomServer, _ ->
-        for (select in refreshSelects) select.update(isCustomServer)
+    val serverInput = ServerInput(settings.multiplayer::defaultServerData) { serverData ->
+        for (select in refreshSelects) select.update(serverData.type)
+        UncivGame.Current.settings.save()
     }
-    tab.add(serverInput).colspan(2).growX()
+
+    val serverDataTable = Table()
+    val defaultServerLabel = "{Default server for all new games}:".toLabel()
+    defaultServerLabel.wrap = true
+    serverDataTable.add(defaultServerLabel)
+        .left()
+        .minWidth(100f)
+        .spaceRight(10f)
+        .growX()
+    serverDataTable.add(serverInput.standalone(true))
+        .right()
+        .minWidth(200f)
+        .maxWidth(600f)
+        .growX()
+    tab.add(serverDataTable).colspan(2).growX()
 
     return tab
 }
@@ -153,10 +171,10 @@ private class RefreshSelect(
     private val customServerItems = (extraCustomServerOptions + dropboxOptions).toGdxArray()
     private val dropboxItems = dropboxOptions.toGdxArray()
 
-    fun update(isCustomServer: Boolean) {
-        if (isCustomServer && items.size != customServerItems.size) {
+    fun update(serverType: ServerType) {
+        if (serverType == ServerType.CUSTOM && items.size != customServerItems.size) {
             replaceItems(customServerItems)
-        } else if (!isCustomServer && items.size != dropboxItems.size) {
+        } else if (serverType == ServerType.DROPBOX && items.size != dropboxItems.size) {
             replaceItems(dropboxItems)
         }
     }
@@ -165,7 +183,7 @@ private class RefreshSelect(
 private fun getInitialOptions(extraCustomServerOptions: List<SelectItem<Duration>>, dropboxOptions: List<SelectItem<Duration>>): Iterable<SelectItem<Duration>> {
     val customServerItems = (extraCustomServerOptions + dropboxOptions).toGdxArray()
     val dropboxItems = dropboxOptions.toGdxArray()
-    return if (Multiplayer.usesCustomServer()) customServerItems else dropboxItems
+    return if (UncivGame.Current.settings.multiplayer.defaultServerData.type == ServerType.CUSTOM) customServerItems else dropboxItems
 }
 
 private fun createRefreshOptions(unit: ChronoUnit, vararg options: Long): List<SelectItem<Duration>> {
